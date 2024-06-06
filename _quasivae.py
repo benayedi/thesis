@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from collections.abc import Iterable
 from typing import Callable, Literal, Optional
@@ -9,6 +11,8 @@ from torch.nn.functional import one_hot
 
 from scvi import REGISTRY_KEYS, settings
 from scvi.module._constants import MODULE_KEYS
+
+llogger = logging.getLogger(__name__)
 from scvi.module.base import (
     BaseMinifiedModeModuleClass,
     EmbeddingModuleMixin,
@@ -16,12 +20,11 @@ from scvi.module.base import (
     auto_move_data,
 )
 
-
-
-torch.backends.cudnn.benchmark = True
-
-llogger = logging.getLogger(__name__)
-
+def quasi_likelihood_loss(px_rate, target, px_r, px_b):
+        residual = torch.pow(target - px_rate, 2)
+        variance = px_r * torch.pow(px_rate, px_b)
+        quasi_likelihood_log = torch.log(residual / variance)
+        return torch.mean(quasi_likelihood_log)
 
 
 
@@ -413,26 +416,23 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         return {
             "px_b": self.px_b,
             "px_rate": px_rate,
-            "px_r": px_r,
+            "px_r": self.px_r,
             "px_scale": px_scale,
             MODULE_KEYS.PX_KEY: px,
             MODULE_KEYS.PL_KEY: pl,
             MODULE_KEYS.PZ_KEY: pz,
         }
     
-    def quasi_likelihood_loss(px_rate, target, px_r, px_b):
-        residual = torch.abs(target - px_rate)
-        variance = px_r * torch.pow(px_rate, px_b)
-        quasi_likelihood = residual / variance
-        return torch.mean(quasi_likelihood)
-
+    
     def loss(self, tensors, inference_outputs, generative_outputs, kl_weight: float = 1.0):
+        from torch.distributions import kl_divergence
+
         x = tensors[REGISTRY_KEYS.X_KEY]
-        kl_divergence_z = kl(inference_outputs["qz"], generative_outputs["pz"]).sum(dim=-1)
+        kl_divergence_z = kl_divergence(inference_outputs[MODULE_KEYS.QZ_KEY], generative_outputs[MODULE_KEYS.PZ_KEY]).sum(dim=-1)
         if not self.use_observed_lib_size:
-            kl_divergence_l = kl(
-                inference_outputs["ql"],
-                generative_outputs["pl"],
+            kl_divergence_l = kl_divergence(
+                inference_outputs[MODULE_KEYS.QL_KEY],
+                generative_outputs[MODULE_KEYS.PL_KEY],
             ).sum(dim=1)
         else:
             kl_divergence_l = torch.tensor(0.0, device=x.device)
