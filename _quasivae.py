@@ -474,7 +474,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         px_b = generative_outputs["px_b"]
         #reconst_loss = -generative_outputs[MODULE_KEYS.PX_KEY].log_prob(x).sum(-1)
 
-        reconst_loss = -quasi_likelihood_loss(px_rate, x, px_r, px_b).sum(-1)
+        reconst_loss = quasi_likelihood_loss(px_rate, x, px_r, px_b).sum(-1)
         print("Max value in reconst_loss:", reconst_loss.max().item())
 
         #print(reconst_loss)
