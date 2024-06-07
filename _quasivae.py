@@ -21,10 +21,37 @@ from scvi.module.base import (
 )
 
 def quasi_likelihood_loss(px_rate, target, px_r, px_b):
-        residual = torch.pow(target - px_rate, 2)
-        variance = px_r * torch.pow(px_rate, px_b)
-        quasi_likelihood_log = torch.log(residual / variance)
-        return torch.mean(quasi_likelihood_log)
+    #print("px_rate:", px_rate)
+    #print("target:", target)
+    #print("px_r:", px_r)
+    #print("px_b:", px_b)
+    print("max value in px_rate:", px_rate.max().item())
+
+    print("max value in px_r:", px_r.max().item())
+    #print("max value in px_b:", px_b.max().item())
+    residual = torch.pow(target - px_rate, 2)
+    print("max value in residual:", residual.max().item())
+
+    #print("residual:", residual)
+    
+    variance = px_r * torch.pow(px_rate, 2)
+    #print("variance:", variance)
+    if torch.any(variance < 0):
+        print("Warning: Variance contains negative values.")
+    print("Max value in variance:", variance.max().item())
+    #print("Min value in variance:", variance.min().item())
+
+    quasi_likelihood_log = torch.log(residual / variance)
+    #print("quasi_likelihood_log:", quasi_likelihood_log)
+    has_nan = torch.isnan(quasi_likelihood_log).any()
+
+    if has_nan:
+        print("Warning: There are NaN values in quasi_likelihood_log")
+    #else:
+        #print("No NaN values in quasi_likelihood_log")
+    print("Max value in quasi_likelihood_log:", quasi_likelihood_log.max().item())
+    #print("Min value in quasi_likelihood_log:", quasi_likelihood_log.min().item())
+    return quasi_likelihood_log
 
 
 
@@ -387,6 +414,9 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             px_r = self.px_r
 
         px_r = torch.exp(px_r)
+        px_b = self.px_b
+        px_b = torch.exp(px_b)
+
 
         if self.gene_likelihood == "zinb":
             px = ZeroInflatedNegativeBinomial(
@@ -414,9 +444,9 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         pz = Normal(torch.zeros_like(z), torch.ones_like(z))
 
         return {
-            "px_b": self.px_b,
+            "px_b": px_b,
             "px_rate": px_rate,
-            "px_r": self.px_r,
+            "px_r": px_r,
             "px_scale": px_scale,
             MODULE_KEYS.PX_KEY: px,
             MODULE_KEYS.PL_KEY: pl,
@@ -428,6 +458,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         from torch.distributions import kl_divergence
 
         x = tensors[REGISTRY_KEYS.X_KEY]
+        n_obs_minibatch = x.shape[0] 
+        print(n_obs_minibatch)
         kl_divergence_z = kl_divergence(inference_outputs[MODULE_KEYS.QZ_KEY], generative_outputs[MODULE_KEYS.PZ_KEY]).sum(dim=-1)
         if not self.use_observed_lib_size:
             kl_divergence_l = kl_divergence(
@@ -440,9 +472,12 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         px_rate = generative_outputs["px_rate"]
         px_r = generative_outputs["px_r"]
         px_b = generative_outputs["px_b"]
+        #reconst_loss = -generative_outputs[MODULE_KEYS.PX_KEY].log_prob(x).sum(-1)
 
-        reconst_loss = quasi_likelihood_loss(px_rate, x, px_r, px_b).sum(-1)
+        reconst_loss = -quasi_likelihood_loss(px_rate, x, px_r, px_b).sum(-1)
+        print("Max value in reconst_loss:", reconst_loss.max().item())
 
+        #print(reconst_loss)
         kl_local_for_warmup = kl_divergence_z
         kl_local_no_warmup = kl_divergence_l
         weighted_kl_local = kl_weight * kl_local_for_warmup + kl_local_no_warmup
@@ -451,6 +486,6 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             "kl_divergence_l": kl_divergence_l,
             "kl_divergence_z": kl_divergence_z,
         }
-        return LossOutput(loss=loss, reconstruction_loss=reconst_loss, kl_local=kl_local)
+        return LossOutput(loss=loss, reconstruction_loss=reconst_loss, kl_local=kl_local, n_obs_minibatch=n_obs_minibatch)
 
 
