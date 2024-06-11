@@ -8,9 +8,13 @@ import numpy as np
 import torch
 from torch.distributions import Distribution
 from torch.nn.functional import one_hot
+from torch import nn
+from torch.distributions import Normal
+from torch.nn import ModuleList
 
 from scvi import REGISTRY_KEYS, settings
 from scvi.module._constants import MODULE_KEYS
+from scvi.nn import FCLayers
 
 llogger = logging.getLogger(__name__)
 from scvi.module.base import (
@@ -99,7 +103,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         self.encode_covariates = encode_covariates
         self.use_size_factor_key = use_size_factor_key
         self.use_observed_lib_size = use_size_factor_key or use_observed_lib_size
-        self.px_b = torch.nn.Parameter(torch.full((n_input,), 2.0))
+        #self.px_b = torch.nn.Parameter(torch.full((n_input,), 2.0))
         if not self.use_observed_lib_size:
             if library_log_means is None or library_log_vars is None:
                 raise ValueError(
@@ -179,7 +183,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             n_input_decoder += batch_dim
 
         _extra_decoder_kwargs = extra_decoder_kwargs or {}
-        self.decoder = DecoderSCVI(
+        self.decoder = DecoderSCVIb(
             n_input_decoder,
             n_input,
             n_cat_list=cat_list,
@@ -395,7 +399,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
                 y,
             )
         else:
-            px_scale, px_r, px_rate, px_dropout = self.decoder(
+            px_scale, px_r, px_rate, px_dropout, px_b = self.decoder(
                 self.dispersion,
                 decoder_input,
                 size_factor,
@@ -416,7 +420,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         px_r = torch.exp(px_r)
         #print("max value in px_r:", px_r.max().item())
 
-        px_b = self.px_b
+        #px_b = self.px_b
         #print("max value in px_b:", px_b.max().item())
 
         #px_b = torch.exp(px_b)
@@ -494,3 +498,130 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         return LossOutput(loss=loss, reconstruction_loss=reconst_loss, kl_local=kl_local, n_obs_minibatch=n_obs_minibatch)
 
 
+# Decoder
+class DecoderSCVIb(nn.Module):
+    """Decodes data from latent space of ``n_input`` dimensions into ``n_output`` dimensions.
+
+    Uses a fully-connected neural network of ``n_hidden`` layers.
+
+    Parameters
+    ----------
+    n_input
+        The dimensionality of the input (latent space)
+    n_output
+        The dimensionality of the output (data space)
+    n_cat_list
+        A list containing the number of categories
+        for each category of interest. Each category will be
+        included using a one-hot encoding
+    n_layers
+        The number of fully-connected hidden layers
+    n_hidden
+        The number of nodes per hidden layer
+    dropout_rate
+        Dropout rate to apply to each of the hidden layers
+    inject_covariates
+        Whether to inject covariates in each layer, or just the first (default).
+    use_batch_norm
+        Whether to use batch norm in layers
+    use_layer_norm
+        Whether to use layer norm in layers
+    scale_activation
+        Activation layer to use for px_scale_decoder
+    **kwargs
+        Keyword args for :class:`~scvi.nn.FCLayers`.
+    """
+
+    def __init__(
+        self,
+        n_input: int,
+        n_output: int,
+        n_cat_list: Iterable[int] = None,
+        n_layers: int = 1,
+        n_hidden: int = 128,
+        inject_covariates: bool = True,
+        use_batch_norm: bool = False,
+        use_layer_norm: bool = False,
+        scale_activation: Literal["softmax", "softplus"] = "softmax",
+        **kwargs,
+    ):
+        super().__init__()
+        self.px_decoder = FCLayers(
+            n_in=n_input,
+            n_out=n_hidden,
+            n_cat_list=n_cat_list,
+            n_layers=n_layers,
+            n_hidden=n_hidden,
+            dropout_rate=0,
+            inject_covariates=inject_covariates,
+            use_batch_norm=use_batch_norm,
+            use_layer_norm=use_layer_norm,
+            **kwargs,
+        )
+
+        # mean gamma
+        if scale_activation == "softmax":
+            px_scale_activation = nn.Softmax(dim=-1)
+        elif scale_activation == "softplus":
+            px_scale_activation = nn.Softplus()
+        self.px_scale_decoder = nn.Sequential(
+            nn.Linear(n_hidden, n_output),
+            px_scale_activation,
+        )
+
+        # dispersion: here we only deal with gene-cell dispersion case
+        self.px_r_decoder = nn.Linear(n_hidden, n_output)
+
+        # dropout
+        self.px_dropout_decoder = nn.Linear(n_hidden, n_output)
+
+        self.px_b_decoder = nn.Sequential(
+         nn.Linear(n_hidden, n_output),  # Linear transformation
+        nn.Softplus()  # Softplus activation to ensure px_b is positive
+    )
+
+    def forward(
+        self,
+        dispersion: str,
+        z: torch.Tensor,
+        library: torch.Tensor,
+        *cat_list: int,
+    ):
+        """The forward computation for a single sample.
+
+         #. Decodes the data from the latent space using the decoder network
+         #. Returns parameters for the ZINB distribution of expression
+         #. If ``dispersion != 'gene-cell'`` then value for that param will be ``None``
+
+        Parameters
+        ----------
+        dispersion
+            One of the following
+
+            * ``'gene'`` - dispersion parameter of NB is constant per gene across cells
+            * ``'gene-batch'`` - dispersion can differ between different batches
+            * ``'gene-label'`` - dispersion can differ between different labels
+            * ``'gene-cell'`` - dispersion can differ for every gene in every cell
+        z :
+            tensor with shape ``(n_input,)``
+        library_size
+            library size
+        cat_list
+            list of category membership(s) for this sample
+
+        Returns
+        -------
+        4-tuple of :py:class:`torch.Tensor`
+            parameters for the ZINB distribution of expression
+
+        """
+        # The decoder returns values for the parameters of the ZINB distribution
+        px = self.px_decoder(z, *cat_list)
+        px_scale = self.px_scale_decoder(px)
+        px_dropout = self.px_dropout_decoder(px)
+        px_b = self.px_b_decoder(px)  # Compute px_b
+
+        # Clamp to high value: exp(12) ~ 160000 to avoid nans (computational stability)
+        px_rate = torch.exp(library) * px_scale  # torch.clamp( , max=12)
+        px_r = self.px_r_decoder(px) if dispersion == "gene-cell" else None
+        return px_scale, px_r, px_rate, px_dropout, px_b
