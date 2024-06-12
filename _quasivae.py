@@ -9,7 +9,7 @@ import torch
 from torch.distributions import Distribution
 from torch.nn.functional import one_hot
 
-from scvi import REGISTRY_KEYS, settings
+from scvi import REGISTRY_KEYS
 from scvi.module._constants import MODULE_KEYS
 
 llogger = logging.getLogger(__name__)
@@ -36,14 +36,12 @@ def quasi_likelihood_loss(px_rate, target, px_r, px_b):
     
     variance = px_r * torch.pow(px_rate, px_b)
     #print("variance:", variance)
-    if torch.any(variance < 0):
-        print("Warning: Variance contains negative values.")
     #print("max value in variance:", variance.max().item())
     #print("Min value in variance:", variance.min().item())
 
-    quasi_likelihood_log = torch.log(residual / variance)
+    quasi_likelihood = residual / variance
     #print("quasi_likelihood_log:", quasi_likelihood_log)
-    has_nan = torch.isnan(quasi_likelihood_log).any()
+    has_nan = torch.isnan(quasi_likelihood).any()
 
     if has_nan:
         print("Warning: There are NaN values in quasi_likelihood_log")
@@ -51,7 +49,7 @@ def quasi_likelihood_loss(px_rate, target, px_r, px_b):
         #print("No NaN values in quasi_likelihood_log")
     #print("Max value in quasi_likelihood_log:", quasi_likelihood_log.max().item())
     #print("Min value in quasi_likelihood_log:", quasi_likelihood_log.min().item())
-    return quasi_likelihood_log
+    return quasi_likelihood
 
 
 
@@ -477,12 +475,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         px_rate = generative_outputs["px_rate"]
         px_r = generative_outputs["px_r"]
         px_b = generative_outputs["px_b"]
-        #reconst_loss = -generative_outputs[MODULE_KEYS.PX_KEY].log_prob(x).sum(-1)
 
         reconst_loss = quasi_likelihood_loss(px_rate, x, px_r, px_b).sum(-1)
-        #print("Max value in reconst_loss:", reconst_loss.max().item())
-
-        #print(reconst_loss)
         kl_local_for_warmup = kl_divergence_z
         kl_local_no_warmup = kl_divergence_l
         weighted_kl_local = kl_weight * kl_local_for_warmup + kl_local_no_warmup
