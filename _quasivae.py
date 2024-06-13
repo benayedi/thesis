@@ -25,37 +25,10 @@ from scvi.module.base import (
 )
 
 def quasi_likelihood_loss(px_rate, target, px_r, px_b):
-    #print("px_rate:", px_rate)
-    #print("target:", target)
-    #print("px_r:", px_r)
-    #print("px_b:", px_b)
-    #print("max value in px_rate:", px_rate.max().item())
-
-    #print("max value in px_r:", px_r.max().item())
-    #print("max value in px_b:", px_b.max().item())
     residual = torch.pow(target - px_rate, 2)
-    #print("max value in residual:", residual.max().item())
-
-    #print("residual:", residual)
-    
     variance = px_r * torch.pow(px_rate, px_b)
-    #print("variance:", variance)
-    if torch.any(variance < 0):
-        print("Warning: Variance contains negative values.")
-    #print("max value in variance:", variance.max().item())
-    #print("Min value in variance:", variance.min().item())
-
-    quasi_likelihood_log = torch.log(residual / variance)
-    #print("quasi_likelihood_log:", quasi_likelihood_log)
-    has_nan = torch.isnan(quasi_likelihood_log).any()
-
-    if has_nan:
-        print("Warning: There are NaN values in quasi_likelihood_log")
-    #else:
-        #print("No NaN values in quasi_likelihood_log")
-    #print("Max value in quasi_likelihood_log:", quasi_likelihood_log.max().item())
-    #print("Min value in quasi_likelihood_log:", quasi_likelihood_log.min().item())
-    return quasi_likelihood_log
+    quasi_likelihood = residual / variance
+    return quasi_likelihood
 
 
 
@@ -89,7 +62,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         extra_decoder_kwargs: dict | None = None,
         batch_embedding_kwargs: dict | None = None,
     ):
-        from scvi.nn import DecoderSCVI, Encoder
+        from scvi.nn import  Encoder
 
         super().__init__()
 
@@ -183,7 +156,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             n_input_decoder += batch_dim
 
         _extra_decoder_kwargs = extra_decoder_kwargs or {}
-        self.decoder = DecoderSCVIb(
+        self.decoder = DecoderQuasi(
             n_input_decoder,
             n_input,
             n_cat_list=cat_list,
@@ -499,7 +472,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
 
 
 # Decoder
-class DecoderSCVIb(nn.Module):
+class DecoderQuasi(nn.Module):
     """Decodes data from latent space of ``n_input`` dimensions into ``n_output`` dimensions.
 
     Uses a fully-connected neural network of ``n_hidden`` layers.
