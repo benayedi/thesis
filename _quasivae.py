@@ -72,8 +72,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         self.encode_covariates = encode_covariates
         self.use_size_factor_key = use_size_factor_key
         self.use_observed_lib_size = use_size_factor_key or use_observed_lib_size
-        #self.px_b = torch.nn.Parameter(torch.full((n_input,), 2.0))
-        self.px_b= torch.nn.Parameter(torch.randn(n_input))
+        self.px_b = torch.nn.Parameter(torch.full((n_input,), 2.0))
+        #self.px_b= torch.nn.Parameter(torch.randn(n_input))
 
         if not self.use_observed_lib_size:
             if library_log_means is None or library_log_vars is None:
