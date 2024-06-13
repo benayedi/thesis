@@ -21,34 +21,9 @@ from scvi.module.base import (
 )
 
 def quasi_likelihood_loss(px_rate, target, px_r, px_b):
-    #print("px_rate:", px_rate)
-    #print("target:", target)
-    #print("px_r:", px_r)
-    #print("px_b:", px_b)
-    #print("max value in px_rate:", px_rate.max().item())
-
-    #print("max value in px_r:", px_r.max().item())
-    #print("max value in px_b:", px_b.max().item())
     residual = torch.pow(target - px_rate, 2)
-    #print("max value in residual:", residual.max().item())
-
-    #print("residual:", residual)
-    
     variance = px_r * torch.pow(px_rate, px_b)
-    #print("variance:", variance)
-    #print("max value in variance:", variance.max().item())
-    #print("Min value in variance:", variance.min().item())
-
     quasi_likelihood = residual / variance
-    #print("quasi_likelihood_log:", quasi_likelihood_log)
-    has_nan = torch.isnan(quasi_likelihood).any()
-
-    if has_nan:
-        print("Warning: There are NaN values in quasi_likelihood_log")
-    #else:
-        #print("No NaN values in quasi_likelihood_log")
-    #print("Max value in quasi_likelihood_log:", quasi_likelihood_log.max().item())
-    #print("Min value in quasi_likelihood_log:", quasi_likelihood_log.min().item())
     return quasi_likelihood
 
 
@@ -97,7 +72,9 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         self.encode_covariates = encode_covariates
         self.use_size_factor_key = use_size_factor_key
         self.use_observed_lib_size = use_size_factor_key or use_observed_lib_size
-        self.px_b = torch.nn.Parameter(torch.full((n_input,), 2.0))
+        #self.px_b = torch.nn.Parameter(torch.full((n_input,), 2.0))
+        self.px_b= torch.nn.Parameter(torch.randn(n_input))
+
         if not self.use_observed_lib_size:
             if library_log_means is None or library_log_vars is None:
                 raise ValueError(
@@ -410,16 +387,10 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             px_r = linear(one_hot(batch_index.squeeze(-1), self.n_batch).float(), self.px_r)
         elif self.dispersion == "gene":
             px_r = self.px_r
-        #print("max value in px_r:", px_r.max().item())
+
         px_r = torch.exp(px_r)
-        #print("max value in px_r:", px_r.max().item())
 
         px_b = self.px_b
-        #print("max value in px_b:", px_b.max().item())
-
-        #px_b = torch.exp(px_b)
-        #print("max value in px_b:", px_b.max().item())
-
 
         if self.gene_likelihood == "zinb":
             px = ZeroInflatedNegativeBinomial(
@@ -462,7 +433,6 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
 
         x = tensors[REGISTRY_KEYS.X_KEY]
         n_obs_minibatch = x.shape[0] 
-        #print(n_obs_minibatch)
         kl_divergence_z = kl_divergence(inference_outputs[MODULE_KEYS.QZ_KEY], generative_outputs[MODULE_KEYS.PZ_KEY]).sum(dim=-1)
         if not self.use_observed_lib_size:
             kl_divergence_l = kl_divergence(
