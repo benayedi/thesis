@@ -389,16 +389,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             px_r = linear(one_hot(batch_index.squeeze(-1), self.n_batch).float(), self.px_r)
         elif self.dispersion == "gene":
             px_r = self.px_r
-        #print("max value in px_r:", px_r.max().item())
         px_r = torch.exp(px_r)
-        #print("max value in px_r:", px_r.max().item())
-
-        #px_b = self.px_b
-        #print("max value in px_b:", px_b.max().item())
-
-        #px_b = torch.exp(px_b)
-        #print("max value in px_b:", px_b.max().item())
-
 
         if self.gene_likelihood == "zinb":
             px = ZeroInflatedNegativeBinomial(
@@ -550,8 +541,9 @@ class DecoderQuasi(nn.Module):
 
         self.px_b_decoder = nn.Sequential(
          nn.Linear(n_hidden, n_output),  # Linear transformation
-        nn.Softplus()  # Softplus activation to ensure px_b is positive
-    )
+        nn.ReLU())  # Ensure px_b is non-negative        )
+                # Initialize px_b_values attribute to store px_b
+        self.px_b_values = None
 
     def forward(
         self,
@@ -593,6 +585,8 @@ class DecoderQuasi(nn.Module):
         px_scale = self.px_scale_decoder(px)
         px_dropout = self.px_dropout_decoder(px)
         px_b = self.px_b_decoder(px)  # Compute px_b
+                # Store px_b for later access
+        self.px_b_values = px_b
 
         # Clamp to high value: exp(12) ~ 160000 to avoid nans (computational stability)
         px_rate = torch.exp(library) * px_scale  # torch.clamp( , max=12)
