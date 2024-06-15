@@ -541,8 +541,9 @@ class DecoderQuasi(nn.Module):
 
         self.px_b_decoder = nn.Sequential(
          nn.Linear(n_hidden, n_output),  # Linear transformation
-        nn.ReLU())  # Ensure px_b is non-negative        )
-                # Initialize px_b_values attribute to store px_b
+         nn.Softmax(dim=-1))  # Softmax activation
+
+        # Initialize px_b_values attribute to store px_b
         self.px_b_values = None
 
     def forward(
