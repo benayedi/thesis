@@ -11,13 +11,12 @@ from torch.nn.functional import one_hot
 
 from scvi import REGISTRY_KEYS
 from scvi.module._constants import MODULE_KEYS
-
 llogger = logging.getLogger(__name__)
 from scvi.module.base import (
     BaseMinifiedModeModuleClass,
     EmbeddingModuleMixin,
     LossOutput,
-    auto_move_data,
+    auto_move_data,  
 )
 
 def quasi_likelihood_loss(px_rate, target, px_r, px_b):
@@ -72,8 +71,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         self.encode_covariates = encode_covariates
         self.use_size_factor_key = use_size_factor_key
         self.use_observed_lib_size = use_size_factor_key or use_observed_lib_size
-        #self.px_b = torch.nn.Parameter(torch.full((n_input,), 2.0))
-        self.px_b = torch.nn.Parameter(torch.abs(torch.randn(n_input)+1))
+        self.px_b = torch.nn.Parameter(torch.abs(torch.full((n_input,), 2.0)))
+        #self.px_b = torch.nn.Parameter(torch.abs(torch.randn(n_input)+1))
         if not self.use_observed_lib_size:
             if library_log_means is None or library_log_vars is None:
                 raise ValueError(
@@ -324,14 +323,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
 
     @auto_move_data
     def generative(self,
-        z: torch.Tensor,
-        library: torch.Tensor,
-        batch_index: torch.Tensor,
-        cont_covs: torch.Tensor | None = None,
-        cat_covs: torch.Tensor | None = None,
-        size_factor: torch.Tensor | None = None,
-        y: torch.Tensor | None = None,
-        transform_batch: torch.Tensor | None = None,
+       
     ) -> dict[str, Distribution | None]:
         """Run the generative process."""
         from torch.distributions import Normal
@@ -454,5 +446,3 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             "kl_divergence_z": kl_divergence_z,
         }
         return LossOutput(loss=loss, reconstruction_loss=reconst_loss, kl_local=kl_local, n_obs_minibatch=n_obs_minibatch)
-
-

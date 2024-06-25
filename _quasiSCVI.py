@@ -28,7 +28,7 @@ from scvi.model.utils import get_minified_adata_scrna
 from _quasivae import QuasiVAE
 from scvi.utils import setup_anndata_dsp
 
-from scvi.model.base import ArchesMixin, BaseMinifiedModeModelClass, RNASeqMixin, VAEMixin
+from scvi.model.base import ArchesMixin, BaseMinifiedModeModelClass, RNASeqMixin, VAEMixin, BaseModelClass
 
 
 
@@ -43,10 +43,10 @@ class QuasiSCVI( EmbeddingMixin,
     VAEMixin,
     ArchesMixin,
     UnsupervisedTrainingMixin,
-    BaseMinifiedModeModelClass,):
+    BaseMinifiedModeModelClass,
+    BaseModelClass,):
     """Quasi single-cell Variational Inference with QuasiVAE as the module."""
 
-    _module_cls = QuasiVAE
 
     def __init__(
         self,
@@ -239,3 +239,7 @@ class QuasiSCVI( EmbeddingMixin,
         minified_adata.obs[_SCVI_OBSERVED_LIB_SIZE] = np.squeeze(np.asarray(counts.sum(axis=1)))
         self._update_adata_and_manager_post_minification(minified_adata, minified_data_type)
         self.module.minified_data_type = minified_data_type
+
+
+    _module_cls = QuasiVAE
+
