@@ -323,6 +323,14 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
 
     @auto_move_data
     def generative(self,
+        z: torch.Tensor,
+        library: torch.Tensor,
+        batch_index: torch.Tensor,
+        cont_covs: torch.Tensor | None = None,
+        cat_covs: torch.Tensor | None = None,
+        size_factor: torch.Tensor | None = None,
+        y: torch.Tensor | None = None,
+        transform_batch: torch.Tensor | None = None,
        
     ) -> dict[str, Distribution | None]:
         """Run the generative process."""
