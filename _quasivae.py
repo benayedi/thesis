@@ -35,7 +35,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         n_batch: int = 0,
         n_labels: int = 0,
         n_hidden: int = 128,
-        n_latent: int = 10,
+        n_latent: int = 15,
+        b_dim: int = 3,
         n_layers: int = 1,
         n_continuous_cov: int = 0,
         n_cats_per_cov: list[int] | None = None,
@@ -64,6 +65,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
 
         self.dispersion = dispersion
         self.n_latent = n_latent
+        self.b_dim = b_dim
         self.log_variational = log_variational
         self.gene_likelihood = gene_likelihood
         self.n_batch = n_batch
@@ -122,8 +124,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
 
         self.b_encoder = Encoder(
             n_input_encoder,
-            1,
-            n_layers=1,
+            b_dim,
+            n_layers=n_layers,
             n_cat_list=encoder_cat_list,
             n_hidden=n_hidden,
             dropout_rate=dropout_rate,
@@ -181,6 +183,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             scale_activation="softplus" if use_size_factor_key else "softmax",
             **_extra_decoder_kwargs,
         )
+        self.b_decoder = torch.nn.Linear(b_dim, n_input)
 
 
     def _get_inference_input(self,
@@ -272,55 +275,54 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         else:
             categorical_input = ()
 
+        
+        qz_b = None
         if self.batch_representation == "embedding" and self.encode_covariates:
             batch_rep = self.compute_embedding(REGISTRY_KEYS.BATCH_KEY, batch_index)
             encoder_input = torch.cat([encoder_input, batch_rep], dim=-1)
             qz, z = self.z_encoder(encoder_input, *categorical_input)
+            qz_b, z_b = self.b_encoder(encoder_input, *categorical_input)
         else:
             qz, z = self.z_encoder(encoder_input, batch_index, *categorical_input)
+            qz_b, z_b = self.b_encoder(encoder_input, batch_index, *categorical_input)
 
         ql = None
-        qb = None
-        if self.batch_representation == "embedding":
-                b, b_encoded = self.b_encoder(encoder_input, *categorical_input)
-        else:
-            qb, b_encoded = self.b_encoder(  
-            encoder_input, batch_index, *categorical_input)
-            b = b_encoded
-        
-
-
+    
         if not self.use_observed_lib_size:
             if self.batch_representation == "embedding":
                 ql, library_encoded = self.l_encoder(encoder_input, *categorical_input)
-                qb, b_encoded = self.b_encoder(encoder_input, *categorical_input)
+                
             else:
                 ql, library_encoded = self.l_encoder(
                     encoder_input, batch_index, *categorical_input
                 )
-                qb, b_encoded = self.b_encoder(  
-            encoder_input, batch_index, *categorical_input
-        )
+                
             library = library_encoded
-            b = b_encoded
 
         if n_samples > 1:
             untran_z = qz.sample((n_samples,))
             z = self.z_encoder.z_transformation(untran_z)
+            
+            untran_zb = qz_b.sample((n_samples,))
+            z_b = self.b_encoder.z_transformation(untran_zb)
+            
             if self.use_observed_lib_size:
                 library = library.unsqueeze(0).expand(
                     (n_samples, library.size(0), library.size(1))
                 )
-                b = b.unsqueeze(0).expand(  
-                    (n_samples, b.size(0), b.size(1))
-        )
+                
+        
             else:
                 library = ql.sample((n_samples,))
-                b = qb.sample((n_samples,))
-        else:
-            b = torch.zeros_like(library) if qb is None else qb.sample()  # Fallback to zeros if qb is None
+                
+        # else:
+        #     b = torch.zeros_like(library) if qb is None else qb.sample()  # Fallback to zeros if qb is None
+        
+
+        b = self.b_decoder(z_b)
+        
         return {
-            "qb": qb,   # Add qb to output
+            "qz_b": qz_b,   # Add qb to output
             "b": b,  # Add b to output
             MODULE_KEYS.Z_KEY: z,
             MODULE_KEYS.QZ_KEY: qz,
@@ -329,7 +331,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         }
 
     @auto_move_data
-    def _cached_inference(
+    def _cached_inference( 
         self,
         qzm: torch.Tensor,
         qzv: torch.Tensor,
@@ -349,12 +351,16 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         # use dist.sample() rather than rsample because we aren't optimizing the z here
         untran_z = dist.sample() if n_samples == 1 else dist.sample((n_samples,))
         z = self.z_encoder.z_transformation(untran_z)
+
+        untran_zb = qz_b.sample((n_samples,))
+        z_b = self.b_encoder.z_transformation(untran_zb)
+        
         library = torch.log(observed_lib_size)
         if n_samples > 1:
             library = library.unsqueeze(0).expand((n_samples, library.size(0), library.size(1)))
-            b = b.unsqueeze(0).expand((n_samples, b.size(0), b.size(1)))  # Expand b
+            # b = b.unsqueeze(0).expand((n_samples, b.size(0), b.size(1)))  # Expand b
 
-
+        b = self.b_decoder(z_b)
         return {
             MODULE_KEYS.Z_KEY: z,
             MODULE_KEYS.QZM_KEY: qzm,
@@ -459,8 +465,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
 
 
         pb = Normal(
-            torch.zeros(3, device=z.device),  # Mean 0
-            torch.ones(3, device=z.device)    # Standard deviation 1
+            torch.zeros(self.b_dim, device=z.device),  # Mean 0
+            torch.ones(self.b_dim, device=z.device)    # Standard deviation 1
         )
 
         return {
@@ -493,10 +499,12 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         b = inference_outputs["b"]
 
         reconst_loss = quasi_likelihood_loss(px_rate, x, px_r, b).sum(-1)
-        kl_local_for_warmup = kl_divergence_z
+        kl_b = kl_divergence(inference_outputs["qz_b"], generative_outputs["pb"]).sum(-1)
+        
+        kl_local_for_warmup = kl_divergence_z + kl_b
         kl_local_no_warmup = kl_divergence_l
-        kl_b = kl_divergence(inference_outputs["qb"], generative_outputs["pb"]).sum(-1)
-        weighted_kl_local = kl_weight * kl_local_for_warmup + kl_local_no_warmup + kl_b
+        
+        weighted_kl_local = kl_weight * kl_local_for_warmup + kl_local_no_warmup 
 
         loss = torch.mean(reconst_loss + weighted_kl_local)
         kl_local = {
