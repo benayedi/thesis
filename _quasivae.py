@@ -8,6 +8,8 @@ import numpy as np
 import torch
 from torch.distributions import Distribution
 from torch.nn.functional import one_hot
+import torch.nn.functional as F
+
 
 from scvi import REGISTRY_KEYS
 from scvi.module._constants import MODULE_KEYS
@@ -58,11 +60,13 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         extra_encoder_kwargs: dict | None = None,
         extra_decoder_kwargs: dict | None = None,
         batch_embedding_kwargs: dict | None = None,
-    ):
+        b_prior_mixture: bool = True,
+        b_prior_mixture_k: int = 20,
+        n_latent_b: int = 15):
         from scvi.nn import DecoderSCVI, Encoder
 
         super().__init__()
-
+        self.n_latent_b=n_latent_b
         self.dispersion = dispersion
         self.n_latent = n_latent
         self.b_dim = b_dim
@@ -184,6 +188,18 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             **_extra_decoder_kwargs,
         )
         self.b_decoder = torch.nn.Linear(b_dim, n_input)
+        self.b_prior_mixture = b_prior_mixture
+        self.b_prior_mixture_k = b_prior_mixture_k
+        if self.b_prior_mixture:
+            if self.n_labels > 1:
+                b_prior_mixture_k = self.n_labels
+            else:
+                b_prior_mixture_k = self.b_prior_mixture_k
+        # Initialize parameters for the mixture model
+            self.b_prior_logits = torch.nn.Parameter(torch.zeros(b_prior_mixture_k))
+            self.b_prior_means = torch.nn.Parameter(torch.randn(b_dim, b_prior_mixture_k))
+            self.b_prior_scales = torch.nn.Parameter(torch.zeros(b_dim, b_prior_mixture_k))
+
 
 
     def _get_inference_input(self,
@@ -286,6 +302,13 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             qz, z = self.z_encoder(encoder_input, batch_index, *categorical_input)
             qz_b, z_b = self.b_encoder(encoder_input, batch_index, *categorical_input)
 
+        #bm=qz_b.mean
+        mc_samples = 15
+        sample_shape = (mc_samples,) if mc_samples is not None else ()
+        if sample_shape:
+            bm = qz_b.rsample(sample_shape=sample_shape)
+        else:
+            bm = qz_b.resample()
         ql = None
     
         if not self.use_observed_lib_size:
@@ -322,6 +345,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         b = self.b_decoder(z_b)
         
         return {
+            "bm": bm,
             "qz_b": qz_b,   # Add qb to output
             "b": b,  # Add b to output
             MODULE_KEYS.Z_KEY: z,
@@ -358,7 +382,6 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         library = torch.log(observed_lib_size)
         if n_samples > 1:
             library = library.unsqueeze(0).expand((n_samples, library.size(0), library.size(1)))
-            # b = b.unsqueeze(0).expand((n_samples, b.size(0), b.size(1)))  # Expand b
 
         b = self.b_decoder(z_b)
         return {
@@ -463,8 +486,18 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             pl = Normal(local_library_log_means, local_library_log_vars.sqrt())
         pz = Normal(torch.zeros_like(z), torch.ones_like(z))
 
+        if self.b_prior_mixture:
+            offset = (
+                10.0 * F.one_hot(y, num_classes=self.n_labels).float()
+                if self.n_labels >= 2
+                else 0.0
+            )
+            cats =torch.distributions.Categorical(logits=self.b_prior_logits + offset)
+            normal_dists = torch.distributions.Normal(self.b_prior_means, torch.exp(self.b_prior_scales))
+            pb = torch.distributions.MixtureSameFamily(cats, normal_dists)
 
-        pb = Normal(
+        else:
+            pb = Normal(
             torch.zeros(self.b_dim, device=z.device),  # Mean 0
             torch.ones(self.b_dim, device=z.device)    # Standard deviation 1
         )
@@ -499,8 +532,15 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         b = inference_outputs["b"]
 
         reconst_loss = quasi_likelihood_loss(px_rate, x, px_r, b).sum(-1)
-        kl_b = kl_divergence(inference_outputs["qz_b"], generative_outputs["pb"]).sum(-1)
-        
+        if self.b_prior_mixture:
+
+            kl_b = inference_outputs["qz_b"].log_prob(
+                inference_outputs["bm"]
+            ) - generative_outputs["pb"].log_prob(inference_outputs["bm"])
+            kl_b = kl_b.sum(-1)
+        else:
+            kl_b = kl_divergence(inference_outputs["qz_b"], generative_outputs["pb"]).sum(-1)
+    
         kl_local_for_warmup = kl_divergence_z + kl_b
         kl_local_no_warmup = kl_divergence_l
         
