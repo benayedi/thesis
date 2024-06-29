@@ -60,7 +60,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         extra_encoder_kwargs: dict | None = None,
         extra_decoder_kwargs: dict | None = None,
         batch_embedding_kwargs: dict | None = None,
-        b_prior_mixture: bool = True,
+        b_prior_mixture: bool = False,
         b_prior_mixture_k: int = 20,
         n_latent_b: int = 15):
         from scvi.nn import DecoderSCVI, Encoder
@@ -187,7 +187,12 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             scale_activation="softplus" if use_size_factor_key else "softmax",
             **_extra_decoder_kwargs,
         )
-        self.b_decoder = torch.nn.Linear(b_dim, n_input)
+        self.b_decoder = torch.nn.Sequential(
+            torch.nn.Linear(b_dim, n_input),  # Linear transformation
+            torch.nn.Softmax(dim=-1)              # Softmax activation
+        )
+
+        #torch.nn.Linear(b_dim, n_input)
         self.b_prior_mixture = b_prior_mixture
         self.b_prior_mixture_k = b_prior_mixture_k
         if self.b_prior_mixture:
