@@ -38,7 +38,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         n_labels: int = 0,
         n_hidden: int = 128,
         n_latent: int = 15,
-        b_dim: int = 3,
+        b_dim: int = 30,
         n_layers: int = 1,
         n_continuous_cov: int = 0,
         n_cats_per_cov: list[int] | None = None,
@@ -60,8 +60,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         extra_encoder_kwargs: dict | None = None,
         extra_decoder_kwargs: dict | None = None,
         batch_embedding_kwargs: dict | None = None,
-        b_prior_mixture: bool = False,
-        b_prior_mixture_k: int = 20,
+        b_prior_mixture: bool = True,
+        b_prior_mixture_k: int = 10,
         n_latent_b: int = 15):
         from scvi.nn import DecoderSCVI, Encoder
 
@@ -78,6 +78,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         self.encode_covariates = encode_covariates
         self.use_size_factor_key = use_size_factor_key
         self.use_observed_lib_size = use_size_factor_key or use_observed_lib_size
+        self.kl_b_log = []  # List to store kl_b values
+
         #self.px_b = torch.nn.Parameter(torch.full((n_input,), 2.0))
         #self.px_b = torch.nn.Parameter(torch.abs(torch.randn(n_input)+1))
         if not self.use_observed_lib_size:
@@ -127,7 +129,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
 
 
         self.b_encoder = Encoder(
-            n_input_encoder,
+            n_latent,
             b_dim,
             n_layers=n_layers,
             n_cat_list=encoder_cat_list,
@@ -192,7 +194,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             torch.nn.Softmax(dim=-1)              # Softmax activation
         )
 
-        #torch.nn.Linear(b_dim, n_input)
+        #self.b_decoder= torch.nn.Linear(b_dim, n_input)
         self.b_prior_mixture = b_prior_mixture
         self.b_prior_mixture_k = b_prior_mixture_k
         if self.b_prior_mixture:
@@ -296,16 +298,28 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         else:
             categorical_input = ()
 
-        
+        #print("encoder_input",encoder_input)
+
         qz_b = None
         if self.batch_representation == "embedding" and self.encode_covariates:
             batch_rep = self.compute_embedding(REGISTRY_KEYS.BATCH_KEY, batch_index)
             encoder_input = torch.cat([encoder_input, batch_rep], dim=-1)
             qz, z = self.z_encoder(encoder_input, *categorical_input)
-            qz_b, z_b = self.b_encoder(encoder_input, *categorical_input)
+            #qz_b, z_b = self.b_encoder(encoder_input, *categorical_input)
         else:
             qz, z = self.z_encoder(encoder_input, batch_index, *categorical_input)
-            qz_b, z_b = self.b_encoder(encoder_input, batch_index, *categorical_input)
+            #qz_b, z_b = self.b_encoder(encoder_input, batch_index, *categorical_input)
+        if cont_covs is not None:
+            b_encoder_input = torch.cat((z, cont_covs), dim=-1)
+        else:
+            b_encoder_input = z
+
+
+        #print("b_encoder_input",b_encoder_input)
+        #print("encoder_input shape:", encoder_input.shape)
+        #print("b_encoder_input shape:", b_encoder_input.shape)
+        qz_b, z_b = self.b_encoder(b_encoder_input, batch_index, *categorical_input)
+
 
         #bm=qz_b.mean
         mc_samples = 15
@@ -351,7 +365,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         
         return {
             "bm": bm,
-            "qz_b": qz_b,   # Add qb to output
+            "qz_b": qz_b,   # Add qz_b to output
             "b": b,  # Add b to output
             MODULE_KEYS.Z_KEY: z,
             MODULE_KEYS.QZ_KEY: qz,
@@ -546,6 +560,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         else:
             kl_b = kl_divergence(inference_outputs["qz_b"], generative_outputs["pb"]).sum(-1)
     
+        self.kl_b_log.append(kl_b.mean().item())
+
         kl_local_for_warmup = kl_divergence_z + kl_b
         kl_local_no_warmup = kl_divergence_l
         
