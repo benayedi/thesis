@@ -25,7 +25,6 @@ from scvi.module.base import (
 
 def quasi_likelihood_loss(px_rate, target, px_r, b):
     residual = torch.pow(target - px_rate, 2)
-    b = torch.clamp(b, min=0, max=3)
     variance = px_r * torch.pow(px_rate, b)
     quasi_likelihood = residual / variance 
     return quasi_likelihood
@@ -187,8 +186,10 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             **_extra_decoder_kwargs,
         )
 
-        self.b_decoder= torch.nn.Linear(b_dim, n_input)
- 
+        self.b_decoder = torch.nn.Sequential(
+            torch.nn.Linear(b_dim, n_input),  # Linear transformation
+            torch.nn.Softmax(dim=-1)              # Softmax activation
+        ) 
         self.b_prior_mixture = b_prior_mixture
         self.b_prior_mixture_k = b_prior_mixture_k
         if self.b_prior_mixture:
