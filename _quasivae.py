@@ -36,6 +36,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
     def __init__(
         self,
         n_input: int,
+        guide_embedding_dim: int,
         n_batch: int = 0,
         n_labels: int = 0,
         n_hidden: int = 128,
@@ -62,13 +63,14 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         extra_encoder_kwargs: dict | None = None,
         extra_decoder_kwargs: dict | None = None,
         batch_embedding_kwargs: dict | None = None,
-        b_prior_mixture: bool = True,
+        b_prior_mixture: bool = False,
         b_prior_mixture_k: int = 5,):
 
         super().__init__()
         self.dispersion = dispersion
         self.n_latent = n_latent
         self.b_dim = b_dim
+        self.guide_embedding_dim = guide_embedding_dim
         self.log_variational = log_variational
         self.gene_likelihood = gene_likelihood
         self.n_batch = n_batch
@@ -125,20 +127,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         _extra_encoder_kwargs = extra_encoder_kwargs or {}
 
 
-        self.b_encoder = Encoder(
-            n_latent,
-            b_dim,
-            n_layers=1,
-            n_cat_list=encoder_cat_list,
-            n_hidden=n_hidden,
-            dropout_rate=dropout_rate,
-            inject_covariates=deeply_inject_covariates,
-            use_batch_norm=use_batch_norm_encoder,
-            use_layer_norm=use_layer_norm_encoder,
-            var_activation=var_activation,
-            return_dist=True,
-            **_extra_encoder_kwargs,
-        )
+        self.b_encoder = torch.nn.Linear(guide_embedding_dim, b_dim)
         self.z_encoder = Encoder(
             n_input_encoder,
             n_latent,
@@ -210,13 +199,13 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
     ) -> dict[str, torch.Tensor | None]:
         """Get input tensors for the inference process."""
         from scvi.data._constants import ADATA_MINIFY_TYPE
-
         if self.minified_data_type is None:
             return {
                 MODULE_KEYS.X_KEY: tensors[REGISTRY_KEYS.X_KEY],
                 MODULE_KEYS.BATCH_INDEX_KEY: tensors[REGISTRY_KEYS.BATCH_KEY],
                 MODULE_KEYS.CONT_COVS_KEY: tensors.get(REGISTRY_KEYS.CONT_COVS_KEY, None),
                 MODULE_KEYS.CAT_COVS_KEY: tensors.get(REGISTRY_KEYS.CAT_COVS_KEY, None),
+                "X_guide_embeddings": tensors["X_guide_embeddings"],
             }
         elif self.minified_data_type == ADATA_MINIFY_TYPE.LATENT_POSTERIOR:
             return {
@@ -277,6 +266,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         batch_index: torch.Tensor,
         cont_covs: torch.Tensor | None = None,
         cat_covs: torch.Tensor | None = None,
+        X_guide_embeddings: torch.Tensor | None = None,
         n_samples: int = 1,
     ) -> dict[str, torch.Tensor | Distribution | None]:
         """Run the regular inference process."""
@@ -295,7 +285,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         else:
             categorical_input = ()
 
-        qb = None
+        #qb = None
         if self.batch_representation == "embedding" and self.encode_covariates:
             batch_rep = self.compute_embedding(REGISTRY_KEYS.BATCH_KEY, batch_index)
             encoder_input = torch.cat([encoder_input, batch_rep], dim=-1)
@@ -303,14 +293,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         else:
             qz, z = self.z_encoder(encoder_input, batch_index, *categorical_input)
 
-
-        if cont_covs is not None:
-            b_encoder_input = torch.cat((z, cont_covs), dim=-1)
-        else:
-            b_encoder_input = z
-
-
-        qb, b = self.b_encoder(b_encoder_input, batch_index, *categorical_input)
+       
+        b = self.b_encoder(X_guide_embeddings, *categorical_input)
 
 
         ql = None
@@ -330,8 +314,8 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
             untran_z = qz.sample((n_samples,))
             z = self.z_encoder.z_transformation(untran_z)
             
-            untran_b = qb.sample((n_samples,))
-            b = self.b_encoder.z_transformation(untran_b)
+            #untran_b = qb.sample((n_samples,))
+            #b = self.b_encoder.z_transformation(untran_b)
             
             if self.use_observed_lib_size:
                 library = library.unsqueeze(0).expand(
@@ -344,7 +328,6 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
  
         
         return {
-            "qb": qb,   # distribution of b 
             "b": b,  # latent variable
             MODULE_KEYS.Z_KEY: z,
             MODULE_KEYS.QZ_KEY: qz,
@@ -529,17 +512,12 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         b = generative_outputs["b"]
 
         reconst_loss = quasi_likelihood_loss(px_rate, x, px_r, b).sum(-1)
-        if self.b_prior_mixture:
-            kl_b = inference_outputs["qb"].log_prob(
-                inference_outputs["b"]
-            ) - generative_outputs["pb"].log_prob(inference_outputs["b"])
-            kl_b = kl_b.sum(-1)
-        else:
-            kl_b = kl_divergence(inference_outputs["qb"], generative_outputs["pb"]).sum(-1)
-    
-        self.kl_b_log.append(kl_b.mean().item())
 
-        kl_local_for_warmup = kl_divergence_z + kl_b
+        #kl_b = kl_divergence(inference_outputs["b"], generative_outputs["pb"]).sum(-1)
+    
+        #self.kl_b_log.append(kl_b.mean().item())
+
+        kl_local_for_warmup = kl_divergence_z #+ kl_b
         kl_local_no_warmup = kl_divergence_l
         
         weighted_kl_local = kl_weight * kl_local_for_warmup + kl_local_no_warmup 
@@ -548,7 +526,7 @@ class QuasiVAE(BaseMinifiedModeModuleClass, EmbeddingModuleMixin):
         kl_local = {
             "kl_divergence_l": kl_divergence_l,
             "kl_divergence_z": kl_divergence_z,
-            "kl_divergence_b": kl_b,  # kl divergence of b
+            #"kl_divergence_b": kl_b,  # kl divergence of b
 
         }
         return LossOutput(loss=loss, reconstruction_loss=reconst_loss, kl_local=kl_local, n_obs_minibatch=n_obs_minibatch)

@@ -101,8 +101,14 @@ class QuasiSCVI( EmbeddingMixin,
                 library_log_means, library_log_vars = _init_library_size(
                     self.adata_manager, n_batch
                 )
+            if adata is not None:
+                self.guide_embedding_dim = adata.obsm["X_guide_embeddings"].shape[1]
+            else:
+                raise ValueError("Anndata object must be provided to extract guide_embedding_dim")
+
             self.module = self._module_cls(
                 n_input=self.summary_stats.n_vars,
+                guide_embedding_dim= self.guide_embedding_dim,
                 n_batch=n_batch,
                 n_labels=self.summary_stats.n_labels,
                 n_continuous_cov=self.summary_stats.get("n_extra_continuous_covs", 0),
